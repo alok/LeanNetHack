@@ -574,6 +574,20 @@ structure ReplayBuffer where
 instance : Inhabited EnhancedAction where
   default := EnhancedAction.wait
 
+instance : Inhabited EnhancedGameState where
+  default := {
+    playerPos := { x := 1, y := 1 }
+    playerStats := {
+      hitpoints := 20, maxHitpoints := 20, strength := 18,
+      dexterity := 14, constitution := 16, intelligence := 12,
+      wisdom := 13, charisma := 10
+    }
+    dungeonLevel := 1
+    bounds := { width := 5, height := 5 }
+    dungeonMap := fun _ => (Terrain.floor, CellContent.empty)
+    inventory := []
+  }
+
 /-- Add experience to replay buffer -/
 def ReplayBuffer.add (buffer : ReplayBuffer) (exp : Experience) : ReplayBuffer :=
   let newExperiences := if buffer.experiences.length >= buffer.maxSize then
