@@ -487,3 +487,194 @@ def tacticalPolicy (depth : Nat := 3) : EnhancedGameState → EnhancedAction := 
   match minimax state depth true (-1000000) 1000000 with
   | (_, some action) => action
   | (_, none) => EnhancedAction.wait  -- Fallback
+
+/-
+=================================================================
+DEEP REINFORCEMENT LEARNING FRAMEWORK
+=================================================================
+-/
+
+/-- Neural network layer representation -/
+structure NeuralLayer where
+  weights : List (List Float)
+  biases : List Float
+  activation : String  -- "relu", "sigmoid", "tanh", "linear"
+  deriving Repr
+
+/-- Neural network for value/policy approximation -/
+structure NeuralNetwork where
+  layers : List NeuralLayer
+  learningRate : Float
+  deriving Repr
+
+/-- Count monsters within radius for feature extraction -/
+def countNearbyMonsters (center : Position) (dungeonMap : DungeonMap) (radius : Nat) : Nat :=
+  let positions := (List.range (2 * radius + 1)).flatMap fun dx =>
+    (List.range (2 * radius + 1)).map fun dy =>
+      { x := center.x + dx - radius, y := center.y + dy - radius : Position }
+  (positions.filter (fun pos => hasMonster pos dungeonMap)).length
+
+/-- Count items within radius for feature extraction -/
+def countNearbyItems (center : Position) (dungeonMap : DungeonMap) (radius : Nat) : Nat :=
+  let positions := (List.range (2 * radius + 1)).flatMap fun dx =>
+    (List.range (2 * radius + 1)).map fun dy =>
+      { x := center.x + dx - radius, y := center.y + dy - radius : Position }
+  let hasItem (pos : Position) : Bool :=
+    match (dungeonMap pos).2 with
+    | CellContent.item _ => true
+    | CellContent.both _ _ => true
+    | _ => false
+  (positions.filter hasItem).length
+
+/-- State feature extraction for neural networks -/
+def extractFeatures (state : EnhancedGameState) : List Float :=
+  let posFeatures := [state.playerPos.x.toFloat, state.playerPos.y.toFloat]
+  let statFeatures := [
+    state.playerStats.hitpoints.toFloat,
+    state.playerStats.strength.toFloat,
+    state.playerStats.dexterity.toFloat
+  ]
+  let contextFeatures := [
+    state.dungeonLevel.toFloat,
+    state.inventory.length.toFloat
+  ]
+  -- Nearby monster/item density (simplified)
+  let nearbyDanger := countNearbyMonsters state.playerPos state.dungeonMap 3
+  let nearbyItems := countNearbyItems state.playerPos state.dungeonMap 3
+  
+  posFeatures ++ statFeatures ++ contextFeatures ++ [nearbyDanger.toFloat, nearbyItems.toFloat]
+
+/-- Value function approximation using neural network -/
+structure ValueFunction where
+  network : NeuralNetwork
+  deriving Repr
+
+/-- Q-function for state-action values -/
+structure QFunction where
+  network : NeuralNetwork
+  deriving Repr
+
+/-- Policy network for action probabilities -/
+structure PolicyNetwork where
+  network : NeuralNetwork
+  deriving Repr
+
+/-- Experience replay buffer for training -/
+structure Experience where
+  state : EnhancedGameState
+  action : EnhancedAction
+  reward : Int
+  nextState : EnhancedGameState
+  done : Bool
+
+structure ReplayBuffer where
+  experiences : List Experience
+  maxSize : Nat
+
+instance : Inhabited EnhancedAction where
+  default := EnhancedAction.wait
+
+/-- Add experience to replay buffer -/
+def ReplayBuffer.add (buffer : ReplayBuffer) (exp : Experience) : ReplayBuffer :=
+  let newExperiences := if buffer.experiences.length >= buffer.maxSize then
+    buffer.experiences.tail!.concat exp
+  else
+    buffer.experiences.concat exp
+  { buffer with experiences := newExperiences }
+
+/-- Sample batch from replay buffer -/
+def ReplayBuffer.sample (buffer : ReplayBuffer) (batchSize : Nat) : List Experience :=
+  buffer.experiences.take batchSize  -- Simplified sampling
+
+/-- Deep Q-Network (DQN) agent -/
+structure DQNAgent where
+  qNetwork : QFunction
+  targetNetwork : QFunction
+  replayBuffer : ReplayBuffer
+  epsilon : Float           -- Exploration rate
+  gamma : Float            -- Discount factor
+  updateFreq : Nat         -- Target network update frequency
+  batchSize : Nat
+
+/-- Epsilon-greedy action selection -/
+def epsilonGreedy (agent : DQNAgent) (state : EnhancedGameState) (rng : Nat) : EnhancedAction :=
+  let validActions := getValidActions state
+  if validActions.isEmpty then
+    EnhancedAction.wait
+  else if (rng % 100).toFloat < agent.epsilon * 100 then
+    -- Explore: random action
+    validActions[rng % validActions.length]!
+  else
+    -- Exploit: best Q-value action (simplified)
+    validActions.head!
+
+/-- Policy Gradient agent using REINFORCE -/
+structure PolicyGradientAgent where
+  policyNetwork : PolicyNetwork
+  baseline : ValueFunction
+  experiences : List Experience
+
+/-- Actor-Critic agent combining value and policy learning -/
+structure ActorCriticAgent where
+  actor : PolicyNetwork      -- Policy network
+  critic : ValueFunction     -- Value network
+  experiences : List Experience
+
+/-- Multi-objective optimization for NetHack -/
+structure MultiObjective where
+  survivalWeight : Float     -- Weight for staying alive
+  progressWeight : Float     -- Weight for dungeon progress
+  explorationWeight : Float  -- Weight for exploration
+  efficiencyWeight : Float   -- Weight for move efficiency
+  deriving Repr
+
+/-- Calculate multi-objective reward -/
+def multiObjectiveReward (oldState newState : EnhancedGameState) (objectives : MultiObjective) : Float :=
+  let survival := if newState.playerStats.hitpoints > 0 then 1.0 else -10.0
+  let progress := if newState.dungeonLevel > oldState.dungeonLevel then 100.0 else 0.0
+  let exploration := if newState.playerPos != oldState.playerPos then 1.0 else 0.0
+  let efficiency := -1.0  -- Small penalty for each move to encourage efficiency
+  
+  objectives.survivalWeight * survival +
+  objectives.progressWeight * progress +
+  objectives.explorationWeight * exploration +
+  objectives.efficiencyWeight * efficiency
+
+/-- Curriculum learning for progressive difficulty -/
+structure CurriculumStage where
+  name : String
+  maxDungeonLevel : Nat
+  monsterDifficulty : Nat    -- 1-10 scale
+  rewardShaping : MultiObjective
+  deriving Repr
+
+/-- Hierarchical RL: High-level goal selection -/
+inductive HighLevelGoal where
+  | exploreLevel : HighLevelGoal
+  | findStairs : HighLevelGoal
+  | fightMonster : Position → HighLevelGoal
+  | collectItem : Position → HighLevelGoal
+  | heal : HighLevelGoal
+  deriving Repr, DecidableEq
+
+instance : ToString HighLevelGoal where
+  toString goal := match goal with
+    | HighLevelGoal.exploreLevel => "explore level"
+    | HighLevelGoal.findStairs => "find stairs"
+    | HighLevelGoal.fightMonster pos => s!"fight monster at {pos}"
+    | HighLevelGoal.collectItem pos => s!"collect item at {pos}"
+    | HighLevelGoal.heal => "heal"
+
+/-- Hierarchical agent with goal decomposition -/
+structure HierarchicalAgent where
+  goalSelector : PolicyNetwork      -- Selects high-level goals
+  lowLevelPolicy : QFunction       -- Executes low-level actions
+  currentGoal : Option HighLevelGoal
+  goalProgress : Nat
+  deriving Repr
+
+/-- Meta-learning agent that adapts strategies -/
+structure MetaLearningAgent where
+  metaNetwork : NeuralNetwork      -- Learns to adapt quickly
+  taskNetworks : List QFunction    -- Specialized networks for different tasks
+  adaptationHistory : List Experience
