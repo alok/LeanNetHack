@@ -1,0 +1,10 @@
+name = "LeanNetHack"
+version = "0.1.0"
+defaultTargets = ["leannethack"]
+
+[[lean_lib]]
+name = "LeanNetHack"
+
+[[lean_exe]]
+name = "leannethack"
+root = "Main"
