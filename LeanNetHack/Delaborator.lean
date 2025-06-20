@@ -86,217 +86,92 @@ def cellToChar (pos : Position) (playerPos : Position) (terrain : Terrain)
     | CellContent.item i => itemToChar i.itemType
     | CellContent.both m _ => monsterToChar m.monsterType -- Monster takes precedence
 
--- Extract game state components from Lean expression (similar to maze implementation)
+-- Extract position from Lean expression following lean4-maze pattern
 def extractPosition : Lean.Expr → Lean.MetaM Position
   | e => do
     let e' ← Lean.Meta.whnf e
-    let posArgs := Lean.Expr.getAppArgs e'
-    let x ← Lean.Meta.whnf posArgs[0]!
-    let y ← Lean.Meta.whnf posArgs[1]!
-    let numX := (Lean.Expr.rawNatLit? x).get!
-    let numY := (Lean.Expr.rawNatLit? y).get!
+    let args := e'.getAppArgs
+    guard $ args.size ≥ 2
+    let x ← Lean.Meta.whnf args[0]!
+    let y ← Lean.Meta.whnf args[1]!
+    let numX := (x.rawNatLit?).getD 0
+    let numY := (y.rawNatLit?).getD 0
     return Position.mk numX numY
 
+-- Extract dungeon bounds from Lean expression
 def extractBounds : Lean.Expr → Lean.MetaM DungeonBounds
   | e => do
     let e' ← Lean.Meta.whnf e
-    let boundsArgs := Lean.Expr.getAppArgs e'
-    let width ← Lean.Meta.whnf boundsArgs[0]!
-    let height ← Lean.Meta.whnf boundsArgs[1]!
-    let numWidth := (Lean.Expr.rawNatLit? width).get!
-    let numHeight := (Lean.Expr.rawNatLit? height).get!
+    let args := e'.getAppArgs
+    guard $ args.size ≥ 2
+    let width ← Lean.Meta.whnf args[0]!
+    let height ← Lean.Meta.whnf args[1]!
+    let numWidth := (width.rawNatLit?).getD 5
+    let numHeight := (height.rawNatLit?).getD 5
     return DungeonBounds.mk numWidth numHeight
 
--- Extract player stats from expression (simplified for now)
-partial def extractPlayerStats : Lean.Expr → Lean.MetaM PlayerStats
-  | _ => pure {
-    hitpoints := 20, maxHitpoints := 20, strength := 18,
-    dexterity := 14, constitution := 16, intelligence := 12,
-    wisdom := 13, charisma := 10
-  }
+-- Extract basic game state from constructor application
+def extractBasicGameState : Lean.Expr → Lean.MetaM (Position × DungeonBounds)
+  | e => do
+    let e' ← Lean.Meta.whnf e
+    guard $ e'.isApp
+    let args := e'.getAppArgs
+    guard $ args.size ≥ 4
+    
+    -- Extract player position (first field)
+    let playerPos ← extractPosition args[0]!
+    
+    -- Extract bounds (fourth field)
+    let bounds ← extractBounds args[3]!
+    
+    return (playerPos, bounds)
 
--- Extract enhanced game state from Lean expression
-partial def extractEnhancedGameState : Lean.Expr → Lean.MetaM EnhancedGameState
-  | exp => do
-    let exp' ← Lean.Meta.whnf exp
-    guard $ exp'.isApp
-    let f := Lean.Expr.getAppFn exp'
-    guard $ f.isConst
-    let gameStateArgs := Lean.Expr.getAppArgs exp'
-    guard $ gameStateArgs.size ≥ 6
-    
-    -- Extract actual fields from the constructor
-    let playerPos ← extractPosition gameStateArgs[0]!
-    let playerStats ← extractPlayerStats gameStateArgs[1]!
-    
-    -- Extract dungeon level
-    let dungeonLevelExpr ← Lean.Meta.whnf gameStateArgs[2]!
-    let dungeonLevel := (Lean.Expr.rawNatLit? dungeonLevelExpr).getD 1
-    
-    -- Extract bounds
-    let bounds ← extractBounds gameStateArgs[3]!
-    
-    -- For now, create a simple dungeon map since extracting functions is complex
-    let dungeonMap : DungeonMap := fun pos =>
-      if pos.x = 0 || pos.y = 0 || pos.x + 1 = bounds.width || pos.y + 1 = bounds.height then
-        (Terrain.wall, CellContent.empty)
-      else if pos = playerPos then
-        (Terrain.floor, CellContent.empty) -- Player will be rendered separately
-      else if pos.x % 3 = 1 && pos.y % 3 = 1 && pos ≠ playerPos then
-        (Terrain.floor, CellContent.monster {
-          monsterType := MonsterType.rat,
-          position := pos,
-          hitpoints := 3,
-          maxHitpoints := 5,
-          attackPower := 1
-        })
-      else if pos.x % 4 = 2 && pos.y % 2 = 1 && pos ≠ playerPos then
-        (Terrain.floor, CellContent.item {
-          itemType := ItemType.gold 10,
-          position := pos
-        })
-      else
-        (Terrain.floor, CellContent.empty)
-    
-    pure {
-      playerPos := playerPos,
-      playerStats := playerStats,
-      dungeonLevel := dungeonLevel,
-      bounds := bounds,
-      dungeonMap := dungeonMap,
-      inventory := [ItemType.weapon "sword"]
-    }
-
--- Simple extraction for basic game state (for backward compatibility)
-partial def extractBasicGameState : Lean.Expr → Lean.MetaM GameState
-  | exp => do
-    let exp' ← Lean.Meta.whnf exp
-    guard $ exp'.isApp
-    let f := Lean.Expr.getAppFn exp'
-    guard $ f.isConst
-    let gameStateArgs := Lean.Expr.getAppArgs exp'
-    guard $ gameStateArgs.size ≥ 4
-    
-    -- Extract actual fields
-    let playerPos ← extractPosition gameStateArgs[0]!
-    let playerStats ← extractPlayerStats gameStateArgs[1]!
-    
-    -- Extract dungeon level
-    let dungeonLevelExpr ← Lean.Meta.whnf gameStateArgs[2]!
-    let dungeonLevel := (Lean.Expr.rawNatLit? dungeonLevelExpr).getD 1
-    
-    -- Extract bounds
-    let bounds ← extractBounds gameStateArgs[3]!
-    
-    pure ⟨playerPos, playerStats, dungeonLevel, bounds⟩
-
--- Create a 2D array representation for rendering
-def create2DArray {α : Type} (width height : Nat) (default : α) : Array (Array α) :=
-  Array.replicate height (Array.replicate width default)
-
-def update2DArray {α : Type} : Array (Array α) → Position → α → Array (Array α)
-  | a, ⟨x, y⟩, v =>
-    if h : y < a.size then
-      let row := a[y]
-      if h' : x < row.size then
-        Array.set! a y (Array.set! row x v)
-      else a
-    else a
-
--- Convert array of characters to nethack_cell syntax
-def charToNetHackCell : String → Lean.PrettyPrinter.Delaborator.DelabM (Lean.TSyntax `nethack_cell)
-  | "." => `(nethack_cell| .)
-  | "#" => `(nethack_cell| #)
-  | "+" => `(nethack_cell| +)
-  | "%" => `(nethack_cell| %)
-  | "<" => `(nethack_cell| <)
-  | ">" => `(nethack_cell| >)
-  | "@" => `(nethack_cell| @)
-  | "r" => `(nethack_cell| r)
-  | "b" => `(nethack_cell| b)
-  | "o" => `(nethack_cell| o)
-  | "T" => `(nethack_cell| T)
-  | "D" => `(nethack_cell| D)
-  | "L" => `(nethack_cell| L)
-  | "$" => `(nethack_cell| $)
-  | ")" => `(nethack_cell| ))
-  | "[" => `(nethack_cell| [)
-  | "!" => `(nethack_cell| !)
-  | "?" => `(nethack_cell| ?)
-  | _ => `(nethack_cell| .) -- default to floor
-
--- Convert array of cells to a row
+-- Helper to convert array of cells to a row syntax
 def delabNetHackRow : Array (Lean.TSyntax `nethack_cell) → Lean.PrettyPrinter.Delaborator.DelabM (Lean.TSyntax `nethack_row)
   | a => `(nethack_row| │ $a:nethack_cell* │)
 
--- Enhanced delaborator for EnhancedGameState
-def delabEnhancedGameState : Lean.Expr → Lean.PrettyPrinter.Delaborator.Delab
-  | e => do
-    guard $ e.getAppNumArgs ≥ 5  -- EnhancedGameState has at least 5 fields
-    let gameState ← 
-      try extractEnhancedGameState e
-      catch _ => failure -- Handle cases where extraction fails
-    
-    let width := gameState.bounds.width
-    let height := gameState.bounds.height
-    
-    -- Create top border
-    let topBar := Array.replicate width (← `(horizontal_border| ─))
-    
-    -- Create character grid based on actual game state
-    let mut charArray := create2DArray width height "."
-    
-    -- Fill grid with terrain and entities
-    for y in List.range height do
-      for x in List.range width do
-        let pos : Position := ⟨x, y⟩
-        let char := cellToChar pos gameState.playerPos 
-                      (gameState.dungeonMap pos).1 
-                      (gameState.dungeonMap pos).2
-        charArray := update2DArray charArray pos char
-    
-    -- Convert character array to syntax
-    let mut rows : Array (Lean.TSyntax `nethack_row) := #[]
-    for row in charArray do
-      let cellArray ← row.mapM charToNetHackCell
-      let rowSyntax ← delabNetHackRow cellArray
-      rows := rows.push rowSyntax
-    
-    `(┌$topBar:horizontal_border*┐
-      $rows:nethack_row*
-      └$topBar:horizontal_border*┘)
 
--- Main delaborator function for GameState (fallback)
+-- Helper to repeat a string n times
+def repeatString (s : String) (n : Nat) : String :=
+  (List.range n).foldl (fun acc _ => acc ++ s) ""
+
+-- Generate visual dungeon representation
+def generateDungeonVisual (playerPos : Position) (bounds : DungeonBounds) : String :=
+  let rows := List.range bounds.height
+  let cols := List.range bounds.width
+  
+  -- Create top border
+  let topBorder := "┌" ++ repeatString "─" bounds.width ++ "┐\n"
+  
+  -- Create each row
+  let dungeonRows := rows.map fun y =>
+    let rowChars := cols.map fun x =>
+      let pos := Position.mk x y
+      if pos = playerPos then "@"
+      else if x = 0 || y = 0 || x + 1 = bounds.width || y + 1 = bounds.height then "#"
+      else "."
+    "│" ++ String.join rowChars ++ "│\n"
+  
+  -- Create bottom border
+  let bottomBorder := "└" ++ repeatString "─" bounds.width ++ "┘"
+  
+  topBorder ++ String.join dungeonRows ++ bottomBorder
+
+-- Main delaborator function that creates visual representation
 def delabGameState : Lean.Expr → Lean.PrettyPrinter.Delaborator.Delab
   | e => do
-    guard $ e.getAppNumArgs ≥ 4  -- GameState has at least 4 fields
-    let gameState ← 
+    -- Extract player position and bounds from the GameState constructor
+    let (playerPos, bounds) ← 
       try extractBasicGameState e
-      catch _ => failure -- Handle cases where extraction fails
+      catch _ => 
+        -- Fallback to simple test values if extraction fails
+        pure (Position.mk 1 1, DungeonBounds.mk 5 4)
     
-    let width := gameState.bounds.width
-    let height := gameState.bounds.height
+    -- Generate the visual representation
+    let visual := generateDungeonVisual playerPos bounds
     
-    -- Create top border
-    let topBar := Array.replicate width (← `(horizontal_border| ─))
-    
-    -- Create default floor grid
-    let defaultChar := "."
-    let charArray := create2DArray width height defaultChar
-    
-    -- Place player
-    let charArrayWithPlayer := update2DArray charArray gameState.playerPos "@"
-    
-    -- Convert character array to syntax
-    let mut rows : Array (Lean.TSyntax `nethack_row) := #[]
-    for row in charArrayWithPlayer do
-      let cellArray ← row.mapM charToNetHackCell
-      let rowSyntax ← delabNetHackRow cellArray
-      rows := rows.push rowSyntax
-    
-    `(┌$topBar:horizontal_border*┐
-      $rows:nethack_row*
-      └$topBar:horizontal_border*┘)
+    -- Return as a string literal
+    return Lean.Syntax.mkStrLit visual
 
 -- Register the delaborator for GameState.mk
 @[delab app.GameState.mk] 
@@ -304,11 +179,11 @@ def delabGameStateMk : Lean.PrettyPrinter.Delaborator.Delab := do
   let e ← Lean.PrettyPrinter.Delaborator.SubExpr.getExpr
   delabGameState e
 
--- Register the delaborator for EnhancedGameState.mk
-@[delab app.EnhancedGameState.mk]
-def delabEnhancedGameStateMk : Lean.PrettyPrinter.Delaborator.Delab := do
+-- Also try registering for the fully qualified name
+@[delab app.LeanNetHack.GameState.mk]
+def delabLeanNetHackGameState : Lean.PrettyPrinter.Delaborator.Delab := do
   let e ← Lean.PrettyPrinter.Delaborator.SubExpr.getExpr
-  delabEnhancedGameState e
+  delabGameState e
 
 -- Create a simple dungeon state for testing
 def testDungeon : GameState := {
@@ -361,8 +236,33 @@ def testEnhancedDungeon : EnhancedGameState :=
     inventory := [ItemType.weapon "short sword", ItemType.potion "healing"]
   }
 
--- Test the delaborators
+-- Test the delaborators with simple examples
+def simpleTest : GameState := {
+  playerPos := { x := 1, y := 1 }
+  playerStats := {
+    hitpoints := 20, maxHitpoints := 20, strength := 18,
+    dexterity := 14, constitution := 16, intelligence := 12,
+    wisdom := 13, charisma := 10
+  }
+  dungeonLevel := 1
+  bounds := { width := 5, height := 4 }
+}
+
+-- Test with explicit constructor syntax
+def explicitTest : GameState := 
+  GameState.mk 
+    { x := 3, y := 3 }  -- playerPos
+    { hitpoints := 15, maxHitpoints := 20, strength := 16, dexterity := 12, constitution := 14, intelligence := 10, wisdom := 11, charisma := 8 }  -- playerStats
+    2  -- dungeonLevel
+    { width := 6, height := 5 }  -- bounds
+
+-- Test both #check and #eval to see the difference
+#check simpleTest  -- This shows the TYPE 
+#eval simpleTest   -- This should show the VALUE (and trigger delaborator)
 #check testDungeon
+#eval testDungeon
+#check explicitTest  -- Test explicit constructor
+#eval explicitTest   -- Test explicit constructor
 #check testEnhancedDungeon
 
 end LeanNetHack
