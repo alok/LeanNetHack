@@ -107,29 +107,42 @@ def extractBounds : Lean.Expr → Lean.MetaM DungeonBounds
     let numHeight := (Lean.Expr.rawNatLit? height).get!
     return DungeonBounds.mk numWidth numHeight
 
+-- Extract player stats from expression (simplified for now)
+partial def extractPlayerStats : Lean.Expr → Lean.MetaM PlayerStats
+  | _ => pure {
+    hitpoints := 20, maxHitpoints := 20, strength := 18,
+    dexterity := 14, constitution := 16, intelligence := 12,
+    wisdom := 13, charisma := 10
+  }
+
 -- Extract enhanced game state from Lean expression
 partial def extractEnhancedGameState : Lean.Expr → Lean.MetaM EnhancedGameState
   | exp => do
     let exp' ← Lean.Meta.whnf exp
+    guard $ exp'.isApp
+    let f := Lean.Expr.getAppFn exp'
+    guard $ f.isConst
     let gameStateArgs := Lean.Expr.getAppArgs exp'
-    -- Try to extract what we can, with fallbacks for demonstration
-    let playerPos ← 
-      try extractPosition gameStateArgs[0]!
-      catch _ => pure { x := 1, y := 1 }
+    guard $ gameStateArgs.size ≥ 6
     
-    let playerStats : PlayerStats := {
-      hitpoints := 18, maxHitpoints := 20, strength := 16,
-      dexterity := 14, constitution := 15, intelligence := 12,
-      wisdom := 13, charisma := 11
-    }
+    -- Extract actual fields from the constructor
+    let playerPos ← extractPosition gameStateArgs[0]!
+    let playerStats ← extractPlayerStats gameStateArgs[1]!
     
-    let bounds : DungeonBounds := { width := 12, height := 8 }
+    -- Extract dungeon level
+    let dungeonLevelExpr ← Lean.Meta.whnf gameStateArgs[2]!
+    let dungeonLevel := (Lean.Expr.rawNatLit? dungeonLevelExpr).getD 1
     
-    -- Simple dungeon map for demonstration
+    -- Extract bounds
+    let bounds ← extractBounds gameStateArgs[3]!
+    
+    -- For now, create a simple dungeon map since extracting functions is complex
     let dungeonMap : DungeonMap := fun pos =>
       if pos.x = 0 || pos.y = 0 || pos.x + 1 = bounds.width || pos.y + 1 = bounds.height then
         (Terrain.wall, CellContent.empty)
-      else if pos.x % 3 = 0 && pos.y % 2 = 0 then
+      else if pos = playerPos then
+        (Terrain.floor, CellContent.empty) -- Player will be rendered separately
+      else if pos.x % 3 = 1 && pos.y % 3 = 1 && pos ≠ playerPos then
         (Terrain.floor, CellContent.monster {
           monsterType := MonsterType.rat,
           position := pos,
@@ -137,7 +150,7 @@ partial def extractEnhancedGameState : Lean.Expr → Lean.MetaM EnhancedGameStat
           maxHitpoints := 5,
           attackPower := 1
         })
-      else if pos.x % 4 = 0 && pos.y % 3 = 0 then
+      else if pos.x % 4 = 2 && pos.y % 2 = 1 && pos ≠ playerPos then
         (Terrain.floor, CellContent.item {
           itemType := ItemType.gold 10,
           position := pos
@@ -148,28 +161,34 @@ partial def extractEnhancedGameState : Lean.Expr → Lean.MetaM EnhancedGameStat
     pure {
       playerPos := playerPos,
       playerStats := playerStats,
-      dungeonLevel := 1,
+      dungeonLevel := dungeonLevel,
       bounds := bounds,
       dungeonMap := dungeonMap,
-      inventory := [ItemType.weapon "dagger"]
+      inventory := [ItemType.weapon "sword"]
     }
 
 -- Simple extraction for basic game state (for backward compatibility)
 partial def extractBasicGameState : Lean.Expr → Lean.MetaM GameState
   | exp => do
     let exp' ← Lean.Meta.whnf exp
+    guard $ exp'.isApp
+    let f := Lean.Expr.getAppFn exp'
+    guard $ f.isConst
     let gameStateArgs := Lean.Expr.getAppArgs exp'
-    let playerPos ← 
-      try extractPosition gameStateArgs[0]!
-      catch _ => pure { x := 1, y := 1 }
+    guard $ gameStateArgs.size ≥ 4
     
-    let playerStats : PlayerStats := {
-      hitpoints := 20, maxHitpoints := 20, strength := 18,
-      dexterity := 14, constitution := 16, intelligence := 12,
-      wisdom := 13, charisma := 10
-    }
-    let bounds : DungeonBounds := { width := 10, height := 10 }
-    pure ⟨playerPos, playerStats, 1, bounds⟩
+    -- Extract actual fields
+    let playerPos ← extractPosition gameStateArgs[0]!
+    let playerStats ← extractPlayerStats gameStateArgs[1]!
+    
+    -- Extract dungeon level
+    let dungeonLevelExpr ← Lean.Meta.whnf gameStateArgs[2]!
+    let dungeonLevel := (Lean.Expr.rawNatLit? dungeonLevelExpr).getD 1
+    
+    -- Extract bounds
+    let bounds ← extractBounds gameStateArgs[3]!
+    
+    pure ⟨playerPos, playerStats, dungeonLevel, bounds⟩
 
 -- Create a 2D array representation for rendering
 def create2DArray {α : Type} (width height : Nat) (default : α) : Array (Array α) :=

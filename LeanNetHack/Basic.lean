@@ -109,31 +109,41 @@ def calculateReward (oldState newState : GameState) : Int :=
   let levelDiff := newState.dungeonLevel - oldState.dungeonLevel
   hpDiff + (levelDiff * 100)  -- Reward descending levels heavily
 
+/-- Check if position is walkable (not a wall) -/
+def isWalkable (pos : Position) : Bool :=
+  true  -- For basic GameState, assume all in-bounds positions are walkable
+
 /-- Valid action predicate for constraint-based optimization -/
 def isValidAction (state : GameState) (action : NetHackAction) : Bool :=
   match action with
   | NetHackAction.move dir =>
     let newPos := state.playerPos.move dir
-    newPos.inBounds state.bounds
+    newPos.inBounds state.bounds && isWalkable newPos
   | _ => true  -- Other actions are generally valid
 
-/-- State transition function -/
+/-- State transition function following lean4-maze pattern -/
 def applyAction (state : GameState) (action : NetHackAction) : GameState :=
   match action with
   | NetHackAction.move dir =>
     let newPos := state.playerPos.move dir
-    if newPos.inBounds state.bounds then
+    if newPos.inBounds state.bounds && isWalkable newPos then
       { state with playerPos := newPos }
     else
-      state  -- Invalid move, no change
+      state  -- Invalid move, no change (like lean4-maze)
   | NetHackAction.wait =>
     -- Waiting might restore some HP in favorable conditions
     let newHP := min (state.playerStats.hitpoints + 1) state.playerStats.maxHitpoints
     { state with playerStats := { state.playerStats with hitpoints := newHP } }
-  | _ => state  -- Other actions don't change basic state yet
+  | NetHackAction.pickup =>
+    -- For basic GameState, pickup does nothing (no items system yet)
+    state
+  | NetHackAction.search =>
+    -- Searching might reveal hidden doors/items (simplified)
+    state
 
-/-- Proof that valid moves preserve bounds -/
-theorem valid_move_preserves_bounds (state : GameState) (dir : Direction) :
+/-- Proof that valid moves preserve bounds (requires valid initial state) -/
+theorem valid_move_preserves_bounds (state : GameState) (dir : Direction) 
+    (h_initial : state.playerPos.inBounds state.bounds) :
   isValidAction state (NetHackAction.move dir) →
   (applyAction state (NetHackAction.move dir)).playerPos.inBounds state.bounds := by
   simp [isValidAction, applyAction]
@@ -141,23 +151,27 @@ theorem valid_move_preserves_bounds (state : GameState) (dir : Direction) :
   split <;> simp_all
 
 /-- Proof that HP never exceeds maximum -/
-theorem hp_bounded (state : GameState) (action : NetHackAction) :
+theorem hp_bounded (state : GameState) (action : NetHackAction) 
+    (h_initial : state.playerStats.hitpoints ≤ state.playerStats.maxHitpoints) :
   (applyAction state action).playerStats.hitpoints ≤
   (applyAction state action).playerStats.maxHitpoints := by
   cases action with
   | move dir =>
     simp [applyAction]
     split
-    · -- Valid move case
-      sorry  -- Need invariant that initial state satisfies HP constraint
-    · -- Invalid move case
-      sorry  -- Need invariant that initial state satisfies HP constraint
+    · -- Valid move case: stats unchanged
+      exact h_initial
+    · -- Invalid move case: stats unchanged
+      exact h_initial
   | wait =>
     simp [applyAction]
     exact Nat.min_le_right _ _
-  | _ =>
+  | pickup =>
     simp [applyAction]
-    sorry  -- Need invariant that initial state satisfies HP constraint
+    exact h_initial
+  | search =>
+    simp [applyAction]
+    exact h_initial
 
 /-- Action sequence type for combinatorial optimization -/
 def ActionSequence := List NetHackAction
@@ -185,14 +199,19 @@ def greedyPolicy : Policy := fun state =>
   NetHackAction.wait  -- Safe default for now
 
 /-- Theorem: Greedy policy maintains non-negative HP change -/
-theorem greedy_policy_safe (state : GameState) :
+theorem greedy_policy_safe (state : GameState) 
+    (h_valid : state.playerStats.hitpoints ≤ state.playerStats.maxHitpoints) :
   let action := greedyPolicy state
   let newState := applyAction state action
   newState.playerStats.hitpoints ≥ state.playerStats.hitpoints := by
   simp [greedyPolicy, applyAction]
-  -- The greedy policy chooses wait, which increases HP by min(hp+1, maxHP)
-  -- This means newHP ≥ min(oldHP+1, maxHP) ≥ oldHP
-  sorry
+  -- The greedy policy chooses wait, which gives min(hp+1, maxHP)
+  -- We need to show: min(hp+1, maxHP) ≥ hp
+  have h1 : state.playerStats.hitpoints ≤ state.playerStats.hitpoints + 1 := Nat.le_add_right _ _
+  have h2 : state.playerStats.hitpoints ≤ min (state.playerStats.hitpoints + 1) state.playerStats.maxHitpoints := by
+    rw [Nat.le_min]
+    exact ⟨h1, h_valid⟩
+  exact h2
 
 /-- Monster types in NetHack -/
 inductive MonsterType where
@@ -260,9 +279,9 @@ structure EnhancedGameState where
   dungeonMap : DungeonMap
   inventory : List ItemType
 
-/-- Combat system -/
-def calculateDamage (attacker : Nat) (defender : Nat) : Nat :=
-  max 1 (attacker - defender / 2)
+/-- Combat system - attacker strength vs defender's natural armor -/
+def calculateDamage (attackerStrength : Nat) (defenderArmor : Nat) : Nat :=
+  max 1 (attackerStrength - defenderArmor / 2)
 
 /-- Check if position contains a monster -/
 def hasMonster (pos : Position) (dungeonMap : DungeonMap) : Bool :=
@@ -297,20 +316,32 @@ instance : ToString EnhancedAction where
     | EnhancedAction.useItem item => s!"use {item}"
     | EnhancedAction.descend => "descend"
 
-/-- Enhanced state transition with combat -/
+/-- Check if position is walkable in enhanced game (terrain + no monsters) -/
+def isWalkableEnhanced (pos : Position) (dungeonMap : DungeonMap) : Bool :=
+  let (terrain, content) := dungeonMap pos
+  match terrain with
+  | Terrain.wall => false  -- Cannot walk through walls!
+  | _ => 
+    match content with
+    | CellContent.monster _ => false  -- Cannot walk through monsters
+    | CellContent.both _ _ => false   -- Cannot walk through monsters (even with items)
+    | _ => true  -- Can walk on floor, corridors, stairs, etc.
+
+/-- Enhanced state transition with proper terrain checking -/
 def applyEnhancedAction (state : EnhancedGameState) (action : EnhancedAction) : EnhancedGameState :=
   match action with
   | EnhancedAction.move dir =>
     let newPos := state.playerPos.move dir
-    if newPos.inBounds state.bounds && not (hasMonster newPos state.dungeonMap) then
+    if newPos.inBounds state.bounds && isWalkableEnhanced newPos state.dungeonMap then
       { state with playerPos := newPos }
     else
-      state
+      state  -- Cannot move there - blocked by wall or monster
   | EnhancedAction.attack dir =>
     let targetPos := state.playerPos.move dir
     match getMonster targetPos state.dungeonMap with
     | some monster =>
-      let damage := calculateDamage state.playerStats.strength monster.maxHitpoints
+      -- Use monster's attack power as natural armor rating
+      let damage := calculateDamage state.playerStats.strength monster.attackPower
       let newHP := monster.hitpoints - damage
       if newHP <= 0 then
         -- Monster defeated, remove from map
@@ -330,9 +361,36 @@ def applyEnhancedAction (state : EnhancedGameState) (action : EnhancedAction) : 
             state.dungeonMap pos
         { state with dungeonMap := newMap }
     | none => state
+  | EnhancedAction.pickup =>
+    -- Pick up item at player's current position
+    let (terrain, content) := state.dungeonMap state.playerPos
+    match content with
+    | CellContent.item item =>
+      let newMap := fun pos =>
+        if pos = state.playerPos then
+          (terrain, CellContent.empty)  -- Remove item from map
+        else
+          state.dungeonMap pos
+      { state with 
+        dungeonMap := newMap,
+        inventory := item.itemType :: state.inventory }
+    | CellContent.both monster item =>
+      let newMap := fun pos =>
+        if pos = state.playerPos then
+          (terrain, CellContent.monster monster)  -- Keep monster, remove item
+        else
+          state.dungeonMap pos
+      { state with 
+        dungeonMap := newMap,
+        inventory := item.itemType :: state.inventory }
+    | _ => state  -- No item to pick up
   | EnhancedAction.descend =>
-    -- Go to next dungeon level
-    { state with dungeonLevel := state.dungeonLevel + 1 }
+    -- Go to next dungeon level (only if on stairs)
+    let (terrain, _) := state.dungeonMap state.playerPos
+    if terrain = Terrain.downstairs then
+      { state with dungeonLevel := state.dungeonLevel + 1 }
+    else
+      state  -- Not on stairs, cannot descend
   | _ => state  -- Other actions to be implemented
 
 /-- Enhanced reward function considering combat and exploration -/
@@ -434,7 +492,7 @@ def getValidActions (state : EnhancedGameState) : List EnhancedAction :=
     match action with
     | EnhancedAction.move dir =>
       let newPos := state.playerPos.move dir
-      newPos.inBounds state.bounds && not (hasMonster newPos state.dungeonMap)
+      newPos.inBounds state.bounds && isWalkableEnhanced newPos state.dungeonMap
     | EnhancedAction.attack dir =>
       let targetPos := state.playerPos.move dir
       hasMonster targetPos state.dungeonMap
