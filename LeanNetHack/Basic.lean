@@ -20,7 +20,7 @@ inductive Direction where
 instance : ToString Direction where
   toString dir := match dir with
     | Direction.north => "north"
-    | Direction.south => "south" 
+    | Direction.south => "south"
     | Direction.east => "east"
     | Direction.west => "west"
     | Direction.northeast => "northeast"
@@ -70,7 +70,7 @@ instance : ToString Terrain where
 /-- Basic game actions -/
 inductive NetHackAction where
   | move : Direction → NetHackAction
-  | pickup : NetHackAction  
+  | pickup : NetHackAction
   | wait : NetHackAction
   | search : NetHackAction
   deriving Repr, DecidableEq
@@ -112,7 +112,7 @@ def calculateReward (oldState newState : GameState) : Int :=
 /-- Valid action predicate for constraint-based optimization -/
 def isValidAction (state : GameState) (action : NetHackAction) : Bool :=
   match action with
-  | NetHackAction.move dir => 
+  | NetHackAction.move dir =>
     let newPos := state.playerPos.move dir
     newPos.inBounds state.bounds
   | _ => true  -- Other actions are generally valid
@@ -142,20 +142,20 @@ theorem valid_move_preserves_bounds (state : GameState) (dir : Direction) :
 
 /-- Proof that HP never exceeds maximum -/
 theorem hp_bounded (state : GameState) (action : NetHackAction) :
-  (applyAction state action).playerStats.hitpoints ≤ 
+  (applyAction state action).playerStats.hitpoints ≤
   (applyAction state action).playerStats.maxHitpoints := by
   cases action with
-  | move dir => 
+  | move dir =>
     simp [applyAction]
     split
     · -- Valid move case
       sorry  -- Need invariant that initial state satisfies HP constraint
-    · -- Invalid move case  
+    · -- Invalid move case
       sorry  -- Need invariant that initial state satisfies HP constraint
-  | wait => 
+  | wait =>
     simp [applyAction]
     exact Nat.min_le_right _ _
-  | _ => 
+  | _ =>
     simp [applyAction]
     sorry  -- Need invariant that initial state satisfies HP constraint
 
@@ -163,7 +163,7 @@ theorem hp_bounded (state : GameState) (action : NetHackAction) :
 def ActionSequence := List NetHackAction
 
 /-- Policy as a function from state to action -/
-def Policy := GameState → NetHackAction
+abbrev Policy := GameState → NetHackAction
 
 /-- Evaluate a policy over multiple steps -/
 def evaluatePolicy (policy : Policy) (initialState : GameState) (steps : Nat) : Int :=
@@ -314,19 +314,19 @@ def applyEnhancedAction (state : EnhancedGameState) (action : EnhancedAction) : 
       let newHP := monster.hitpoints - damage
       if newHP <= 0 then
         -- Monster defeated, remove from map
-        let newMap := fun pos => 
-          if pos = targetPos then 
+        let newMap := fun pos =>
+          if pos = targetPos then
             ((state.dungeonMap pos).1, CellContent.empty)
-          else 
+          else
             state.dungeonMap pos
         { state with dungeonMap := newMap }
       else
         -- Monster damaged but alive
         let damagedMonster := { monster with hitpoints := newHP }
-        let newMap := fun pos => 
-          if pos = targetPos then 
+        let newMap := fun pos =>
+          if pos = targetPos then
             ((state.dungeonMap pos).1, CellContent.monster damagedMonster)
-          else 
+          else
             state.dungeonMap pos
         { state with dungeonMap := newMap }
     | none => state
@@ -354,12 +354,12 @@ structure DungeonGenParams where
 def generateDungeon (bounds : DungeonBounds) (params : DungeonGenParams) : DungeonMap :=
   fun pos =>
     -- Simple pattern-based generation
-    let terrain := if pos.x % 3 = 0 || pos.y % 3 = 0 then 
-                     Terrain.corridor 
-                   else 
+    let terrain := if pos.x % 3 = 0 || pos.y % 3 = 0 then
+                     Terrain.corridor
+                   else
                      Terrain.floor
     let content := if pos.x % 7 = 0 && pos.y % 5 = 0 then
-                     CellContent.monster { 
+                     CellContent.monster {
                        monsterType := MonsterType.rat,
                        position := pos,
                        hitpoints := 5,
@@ -382,11 +382,11 @@ def manhattanDistance (a b : Position) : Nat :=
 /-- Breadth-first search for shortest path -/
 partial def findPath (start goal : Position) (bounds : DungeonBounds) (dungeonMap : DungeonMap) : List Position :=
   let isWalkable (pos : Position) : Bool :=
-    pos.inBounds bounds && 
+    pos.inBounds bounds &&
     match (dungeonMap pos).1 with
     | Terrain.wall => false
     | _ => not (hasMonster pos dungeonMap)
-  
+
   let rec bfs (queue : List (Position × List Position)) (visited : List Position) : List Position :=
     match queue with
     | [] => []  -- No path found
@@ -404,7 +404,7 @@ partial def findPath (start goal : Position) (bounds : DungeonBounds) (dungeonMa
         ].filter isWalkable
         let newQueue := neighbors.map (fun pos => (pos, current :: path))
         bfs (rest ++ newQueue) (current :: visited)
-  
+
   bfs [(start, [])] []
 
 /-- Monte Carlo Tree Search node -/
@@ -432,7 +432,7 @@ def getValidActions (state : EnhancedGameState) : List EnhancedAction :=
   let basicActions := [EnhancedAction.wait, EnhancedAction.pickup, EnhancedAction.descend]
   (moveActions ++ attackActions ++ basicActions).filter (fun action =>
     match action with
-    | EnhancedAction.move dir => 
+    | EnhancedAction.move dir =>
       let newPos := state.playerPos.move dir
       newPos.inBounds state.bounds && not (hasMonster newPos state.dungeonMap)
     | EnhancedAction.attack dir =>
@@ -442,7 +442,7 @@ def getValidActions (state : EnhancedGameState) : List EnhancedAction :=
   )
 
 /-- Minimax with alpha-beta pruning for tactical decisions -/
-partial def minimax (state : EnhancedGameState) (depth : Nat) (isMaximizing : Bool) 
+partial def minimax (state : EnhancedGameState) (depth : Nat) (isMaximizing : Bool)
     (alpha beta : Int) : Int × Option EnhancedAction :=
   if depth = 0 then
     (enhancedReward state state, none)  -- Base case, no change in reward
@@ -451,7 +451,7 @@ partial def minimax (state : EnhancedGameState) (depth : Nat) (isMaximizing : Bo
     if validActions.isEmpty then
       (enhancedReward state state, none)
     else
-      let rec searchActions (actions : List EnhancedAction) (bestScore : Int) 
+      let rec searchActions (actions : List EnhancedAction) (bestScore : Int)
           (bestAction : Option EnhancedAction) (currentAlpha currentBeta : Int) :=
         match actions with
         | [] => (bestScore, bestAction)
@@ -476,7 +476,7 @@ partial def minimax (state : EnhancedGameState) (depth : Nat) (isMaximizing : Bo
                 searchActions rest score (some action) currentAlpha newBeta
             else
               searchActions rest bestScore bestAction currentAlpha currentBeta
-      
+
       if isMaximizing then
         searchActions validActions (-1000000) none alpha beta
       else
@@ -541,7 +541,7 @@ def extractFeatures (state : EnhancedGameState) : List Float :=
   -- Nearby monster/item density (simplified)
   let nearbyDanger := countNearbyMonsters state.playerPos state.dungeonMap 3
   let nearbyItems := countNearbyItems state.playerPos state.dungeonMap 3
-  
+
   posFeatures ++ statFeatures ++ contextFeatures ++ [nearbyDanger.toFloat, nearbyItems.toFloat]
 
 /-- Value function approximation using neural network -/
@@ -634,7 +634,7 @@ def multiObjectiveReward (oldState newState : EnhancedGameState) (objectives : M
   let progress := if newState.dungeonLevel > oldState.dungeonLevel then 100.0 else 0.0
   let exploration := if newState.playerPos != oldState.playerPos then 1.0 else 0.0
   let efficiency := -1.0  -- Small penalty for each move to encourage efficiency
-  
+
   objectives.survivalWeight * survival +
   objectives.progressWeight * progress +
   objectives.explorationWeight * exploration +

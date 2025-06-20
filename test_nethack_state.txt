@@ -1,0 +1,15 @@
+=== NetHack Level 2 ===
+Position: (2, 3)
+HP: 14/20 Str: 18 Dex: 15 Con: 16 Int: 11 Wis: 12 Cha: 10
+Inventory: weapon(short sword), armor(leather armor), potion(healing)
+
+┌────────────┐
+│############│
+│#<.........#│
+│#....#$....#│
+│#.@.r#.....#│
+│#....#.###.#│
+│#.......o..#│
+│#..)......>#│
+│############│
+└────────────┘
